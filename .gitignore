@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Streamlit
+.streamlit/
+
+# Secrets & Local DB
+.env
+*.db
+*.db-journal
+
+# OS
+.DS_Store
+Thumbs.db
