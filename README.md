@@ -38,3 +38,4 @@ streamlit run app.py
 - `api.py`: Logica di recupero prezzi da AlphaVantage.
 - `calculations.py`: Logica finanziaria e calcoli automatici.
 - `requirements.txt`: Elenco delle librerie necessarie.
+# trading_journal
