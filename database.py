@@ -104,7 +104,7 @@ def get_all_trades():
 
 def get_trades_df():
     # Helper to get data as pandas DataFrame for Streamlit
-    engine = create_engine(f'sqlite:///{DB_NAME}')
+    # engine = create_engine(f'sqlite:///{DB_NAME}')
     return pd.read_sql('trading_log', engine)
 
 def get_initial_balance():
