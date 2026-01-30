@@ -438,8 +438,37 @@ with tabs[3]:
     
     calc_df = pd.DataFrame(calc_data)
     
+    # --- Visualizations ---
+    st.subheader("📊 Analisi Grafica Scenari")
+    g_cols = st.columns(2)
+    
+    with g_cols[0]:
+        st.markdown("##### 📈 Grafico di Payoff (Netto)")
+        fig_payoff = px.line(calc_df, x="Prezzo", y="Profitto Netto", 
+                             template="plotly_dark",
+                             labels={"Prezzo": "Prezzo (€)", "Profitto Netto": "Profitto (€)"},
+                             color_discrete_sequence=['#00d4ff'])
+        fig_payoff.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig_payoff.add_vline(x=buy_price, line_dash="dot", line_color="#f1c40f")
+        fig_payoff.update_traces(mode='lines+markers', marker=dict(size=4))
+        st.plotly_chart(fig_payoff, use_container_width=True)
+
+    with g_cols[1]:
+        st.markdown("##### 📉 Performance Percentuale (PL %)")
+        # Color bars based on positive/negative
+        calc_df['color'] = calc_df['PL %'].apply(lambda x: '#2ecc71' if x > 0 else '#e74c3c')
+        fig_pl = px.bar(calc_df, x="Prezzo", y="PL %",
+                        template="plotly_dark",
+                        labels={"Prezzo": "Prezzo (€)", "PL %": "Rendimento (%)"},
+                        color='color', color_discrete_map="identity")
+        fig_pl.add_hline(y=0, line_color="white", line_width=1)
+        fig_pl.add_vline(x=buy_price, line_dash="dot", line_color="#f1c40f")
+        # Format Y axis as percentage
+        fig_pl.update_layout(yaxis_tickformat='.1%')
+        st.plotly_chart(fig_pl, use_container_width=True)
+
     # Display Table with Formatting
-    st.subheader("📊 Analisi Scenari")
+    st.subheader("📋 Tabella Riepilogativa Scenari")
     
     def highlight_buy_price(s):
         is_buy = s.Prezzo == buy_price
