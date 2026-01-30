@@ -142,7 +142,7 @@ df = get_trades_df()
 
 # --- Main App ---
 st.title("📈 Automatic Trading Journal")
-tabs = st.tabs(["📊 Dashboard", "📝 Operazioni", "➕ Nuova Posizione"])
+tabs = st.tabs(["📊 Dashboard", "📝 Operazioni", "➕ Nuova Posizione", "🧮 Calcolatore TP/SL"])
 
 # --- Dashboard Tab ---
 with tabs[0]:
@@ -382,6 +382,83 @@ with tabs[2]:
                 st.success("Nuova posizione inserita!"); st.rerun()
     else:
         st.warning("Solo gli amministratori possono inserire nuove posizioni.")
+
+# --- TP/SL Calculator Tab ---
+with tabs[3]:
+    st.subheader("🧮 Calcolatore Target Price & Stop Loss")
+    
+    # Input Section
+    with st.container():
+        c1, c2, c3 = st.columns(3)
+        buy_price = c1.number_input("Prezzo di Acquisto", min_value=0.0001, value=10.00, step=0.01, format="%.4f")
+        quantity = c2.number_input("Quantità di Acquisto", min_value=0.0001, value=100.0, step=1.0)
+        total_investment = buy_price * quantity
+        c3.metric("Investimento Totale", f"€ {total_investment:,.2f}")
+        
+        c4, c5, c6 = st.columns(3)
+        entry_cost = c4.number_input("Costo di Entrata (€)", min_value=0.0, value=2.95, step=0.05)
+        exit_cost = c5.number_input("Costo di Uscita (€)", min_value=0.0, value=2.95, step=0.05)
+        
+        st.divider()
+        
+        # Range Configuration
+        st.markdown("##### ⚙️ Configurazione Range Tabella")
+        r1, r2, r3 = st.columns(3)
+        down_range = r1.number_input("Diminuzione Prezzo (range)", min_value=0.0, value=1.0, step=0.1)
+        up_range = r2.number_input("Aumento Prezzo (range)", min_value=0.0, value=2.0, step=0.1)
+        step_val = r3.number_input("Step di variazione", min_value=0.0001, value=0.05, step=0.01, format="%.4f")
+
+    # Calculation Logic
+    import numpy as np
+    
+    start_p = max(0.0001, buy_price - down_range)
+    end_p = buy_price + up_range
+    
+    # Generate sequence including the exact buy_price, handled with precision
+    prices = np.arange(start_p, end_p + step_val, step_val)
+    # Append buy_price, round to handle float precision, and take unique values
+    prices = np.unique(np.round(np.append(prices, buy_price), 4))
+    # Sort just in case np.unique didn't maintain order (it usually does but safety first)
+    prices = np.sort(prices)
+    
+    calc_data = []
+    for p in prices:
+        pl_perc = (p / buy_price) - 1
+        pl_euro = (p - buy_price) * quantity - entry_cost - exit_cost
+        taxes = max(0, pl_euro * 0.26) if pl_euro > 0 else 0
+        net_profit = pl_euro - taxes
+        
+        calc_data.append({
+            "Prezzo": p,
+            "PL %": pl_perc,
+            "PL €": pl_euro,
+            "Tasse (26%)": taxes,
+            "Profitto Netto": net_profit
+        })
+    
+    calc_df = pd.DataFrame(calc_data)
+    
+    # Display Table with Formatting
+    st.subheader("📊 Analisi Scenari")
+    
+    def highlight_buy_price(s):
+        is_buy = s.Prezzo == buy_price
+        return ['background-color: #1e3a5f; font-weight: bold' if is_buy else '' for _ in s]
+
+    def color_pl(val):
+        color = '#2ecc71' if val > 0 else '#e74c3c' if val < 0 else 'white'
+        return f'color: {color}'
+
+    styled_df = calc_df.style.format({
+        "Prezzo": "{:.4f}",
+        "PL %": "{:.2%}",
+        "PL €": "€ {:.2f}",
+        "Tasse (26%)": "€ {:.2f}",
+        "Profitto Netto": "€ {:.2f}"
+    }).apply(highlight_buy_price, axis=1)\
+      .map(color_pl, subset=['PL %', 'PL €', 'Profitto Netto'])
+
+    st.dataframe(styled_df, use_container_width=True, height=600, hide_index=True)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Automatic Trading Journal v2.5")
