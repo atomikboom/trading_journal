@@ -151,17 +151,23 @@ with tabs[0]:
         st.metric("Capitale Totale", f"€ {initial_balance:,.2f}")
         st.info("Nessun dato sulle operazioni disponibile.")
     else:
-        # 1. Performance Metrics
+        # 1. Performance & Risk Metrics
         perf = get_portfolio_performance_metrics(df)
-        risk = get_risk_analysis(df)
+        risk = get_risk_analysis(df, initial_balance)
         tax_summary = get_tax_wallet_summary(df)
         
-        st.subheader("🚀 Portafoglio Performance")
+        st.subheader("🚀 Portafoglio Performance & Risk")
         p_cols = st.columns(4)
-        p_cols[0].metric("Mensile", f"{perf.get('Monthly', 0):.2f} %")
-        p_cols[1].metric("YTD", f"{perf.get('YTD', 0):.2f} %")
-        p_cols[2].metric("LTM (12m)", f"{perf.get('LTM', 0):.2f} %")
-        p_cols[3].metric("Inception", f"{perf.get('Inception', 0):.2f} %")
+        p_cols[0].metric("Inception", f"{perf.get('Inception', 0):.2f} %")
+        p_cols[1].metric("Sharpe Ratio", f"{risk['Sharpe']:.2f}")
+        p_cols[2].metric("Sortino Ratio", f"{risk['Sortino']:.2f}")
+        p_cols[3].metric("VaR (95%)", f"{risk['VaR']:.2f} %")
+
+        d_cols = st.columns(4)
+        d_cols[0].metric("Mensile", f"{perf.get('Monthly', 0):.2f} %")
+        d_cols[1].metric("YTD", f"{perf.get('YTD', 0):.2f} %")
+        d_cols[2].metric("Max Drawdown", f"{risk['MaxDrawdown']:.2f} %", delta=f"Current: {risk['CurrentDrawdown']:.2f} %", delta_color="inverse")
+        d_cols[3].metric("Volatilità", f"{risk['StdDev']:.2f} %")
 
         st.divider()
         
@@ -173,10 +179,12 @@ with tabs[0]:
             current_value = df['valore_attuale'].sum()
             total_profit = df['net_profit'].sum()
             total_equity = initial_balance + total_profit
+            current_exposure = df[df['stato'] == 'APERTA']['investito_lordo'].sum()
+            exposure_buffer = total_equity - current_exposure
             
-            sub_cols[0].metric("Saldo Iniziale", f"€ {initial_balance:,.2f}")
+            sub_cols[0].metric("Capitale Attuale", f"€ {total_equity:,.2f}", delta=f"{((total_equity/initial_balance)-1)*100:.2f} %" if initial_balance > 0 else None)
             sub_cols[1].metric("Profitto Netto", f"€ {total_profit:,.2f}", delta=f"{total_profit:,.2f}")
-            sub_cols[2].metric("Capitale Attuale", f"€ {total_equity:,.2f}", delta=f"{((total_equity/initial_balance)-1)*100:.2f} %" if initial_balance > 0 else None)
+            sub_cols[2].metric("Exposure Buffer (Cash)", f"€ {exposure_buffer:,.2f}", delta=f"Exposure: € {current_exposure:,.2f}", delta_color="inverse")
         
         with m_cols[1]:
             st.subheader("💼 Zainetto Fiscale")
@@ -207,18 +215,16 @@ with tabs[0]:
             st.plotly_chart(fig_equity, use_container_width=True)
             
         with g_cols[1]:
-            st.subheader("Monthly Profit/Loss (Realized)")
-            df_closed = df[df['stato'] == 'CHIUSA'].copy()
-            if not df_closed.empty:
-                df_closed['data_operazione'] = pd.to_datetime(df_closed['data_operazione'])
-                df_monthly = df_closed.set_index('data_operazione').resample('ME')['plus_minus'].sum().reset_index()
-                df_monthly['data_operazione'] = df_monthly['data_operazione'].dt.strftime('%b %Y')
-                fig_monthly = px.bar(df_monthly, x='data_operazione', y='plus_minus', 
-                                    color='plus_minus', color_continuous_scale=['#e74c3c', '#2ecc71'],
-                                    template="plotly_dark", title="Profitto/Perdita per Mese")
-                st.plotly_chart(fig_monthly, use_container_width=True)
+            st.subheader("Drawdown Analysis (%)")
+            if 'EquityCurve' in risk:
+                drawdown_df = pd.DataFrame(risk['EquityCurve'])
+                fig_dd = px.area(drawdown_df, x='data_operazione', y='drawdown',
+                                title="Andamento Drawdown",
+                                template="plotly_dark", color_discrete_sequence=['#e74c3c'])
+                fig_dd.update_layout(yaxis_tickformat='.1%')
+                st.plotly_chart(fig_dd, use_container_width=True)
             else:
-                st.info("Nessuna chiusura presente per il grafico mensile.")
+                st.info("Dati drawdown non disponibili.")
 
         # 4. Allocation Details
         st.divider()
@@ -407,6 +413,26 @@ with tabs[3]:
         down_range = r1.number_input("Diminuzione Prezzo (range)", min_value=0.0, value=1.0, step=0.1)
         up_range = r2.number_input("Aumento Prezzo (range)", min_value=0.0, value=2.0, step=0.1)
         step_val = r3.number_input("Step di variazione", min_value=0.0001, value=0.05, step=0.01, format="%.4f")
+
+    # Scaling Simulator Section
+    with st.expander("🔄 Simulatore Scaling In/Out (Avanzato)"):
+        st.markdown("Simula come cambia il tuo prezzo medio se compri ancora o se vendi una parte.")
+        sc1, sc2, sc3 = st.columns(3)
+        action = sc1.radio("Azione", ["Scaling Out (Vendi parte)", "Scaling In (Compra ancora)"])
+        sc_qta = sc2.number_input("Quantità Scaling", min_value=0.0, value=quantity/2 if action == "Scaling Out (Vendi parte)" else quantity)
+        sc_price = sc3.number_input("Prezzo di Esecuzione Scaling", min_value=0.0001, value=buy_price * 1.1 if action == "Scaling Out (Vendi parte)" else buy_price * 0.9)
+        
+        if action == "Scaling Out (Vendi parte)":
+            if sc_qta > quantity:
+                st.error("Non puoi vendere più di quanto possiedi!")
+            else:
+                realized_pl = (sc_price - buy_price) * sc_qta - exit_cost
+                rem_qta = quantity - sc_qta
+                st.info(f"💰 **Risultato Scaling Out:**\n- Profitto Realizzato: € {realized_pl:.2f}\n- Quantità Rimanente: {rem_qta}\n- Prezzo Medio Invariato: € {buy_price:.4f}")
+        else:
+            new_total_qta = quantity + sc_qta
+            new_pmc = ((quantity * buy_price) + (sc_qta * sc_price) + entry_cost) / new_total_qta
+            st.info(f"📥 **Risultato Scaling In:**\n- Nuova Quantità Totale: {new_total_qta}\n- Nuovo Prezzo Medio di Carico (PMC): € {new_pmc:.4f}\n- Investimento Extra: € {(sc_qta * sc_price):.2f}")
 
     # Calculation Logic
     import numpy as np
