@@ -142,7 +142,7 @@ df = get_trades_df()
 
 # --- Main App ---
 st.title("📈 Automatic Trading Journal")
-tabs = st.tabs(["📊 Dashboard", "📝 Operazioni", "➕ Nuova Posizione"])
+tabs = st.tabs(["📊 Dashboard", "📝 Operazioni", "➕ Nuova Posizione", "🧮 Calcolatore TP/SL"])
 
 # --- Dashboard Tab ---
 with tabs[0]:
@@ -151,17 +151,23 @@ with tabs[0]:
         st.metric("Capitale Totale", f"€ {initial_balance:,.2f}")
         st.info("Nessun dato sulle operazioni disponibile.")
     else:
-        # 1. Performance Metrics
+        # 1. Performance & Risk Metrics
         perf = get_portfolio_performance_metrics(df)
-        risk = get_risk_analysis(df)
+        risk = get_risk_analysis(df, initial_balance)
         tax_summary = get_tax_wallet_summary(df)
         
-        st.subheader("🚀 Portafoglio Performance")
+        st.subheader("🚀 Portafoglio Performance & Risk")
         p_cols = st.columns(4)
-        p_cols[0].metric("Mensile", f"{perf.get('Monthly', 0):.2f} %")
-        p_cols[1].metric("YTD", f"{perf.get('YTD', 0):.2f} %")
-        p_cols[2].metric("LTM (12m)", f"{perf.get('LTM', 0):.2f} %")
-        p_cols[3].metric("Inception", f"{perf.get('Inception', 0):.2f} %")
+        p_cols[0].metric("Inception", f"{perf.get('Inception', 0):.2f} %")
+        p_cols[1].metric("Sharpe Ratio", f"{risk['Sharpe']:.2f}")
+        p_cols[2].metric("Sortino Ratio", f"{risk['Sortino']:.2f}")
+        p_cols[3].metric("VaR (95%)", f"{risk['VaR']:.2f} %")
+
+        d_cols = st.columns(4)
+        d_cols[0].metric("Mensile", f"{perf.get('Monthly', 0):.2f} %")
+        d_cols[1].metric("YTD", f"{perf.get('YTD', 0):.2f} %")
+        d_cols[2].metric("Max Drawdown", f"{risk['MaxDrawdown']:.2f} %", delta=f"Current: {risk['CurrentDrawdown']:.2f} %", delta_color="inverse")
+        d_cols[3].metric("Volatilità", f"{risk['StdDev']:.2f} %")
 
         st.divider()
         
@@ -173,10 +179,12 @@ with tabs[0]:
             current_value = df['valore_attuale'].sum()
             total_profit = df['net_profit'].sum()
             total_equity = initial_balance + total_profit
+            current_exposure = df[df['stato'] == 'APERTA']['investito_lordo'].sum()
+            exposure_buffer = total_equity - current_exposure
             
-            sub_cols[0].metric("Saldo Iniziale", f"€ {initial_balance:,.2f}")
+            sub_cols[0].metric("Capitale Attuale", f"€ {total_equity:,.2f}", delta=f"{((total_equity/initial_balance)-1)*100:.2f} %" if initial_balance > 0 else None)
             sub_cols[1].metric("Profitto Netto", f"€ {total_profit:,.2f}", delta=f"{total_profit:,.2f}")
-            sub_cols[2].metric("Capitale Attuale", f"€ {total_equity:,.2f}", delta=f"{((total_equity/initial_balance)-1)*100:.2f} %" if initial_balance > 0 else None)
+            sub_cols[2].metric("Exposure Buffer (Cash)", f"€ {exposure_buffer:,.2f}", delta=f"Exposure: € {current_exposure:,.2f}", delta_color="inverse")
         
         with m_cols[1]:
             st.subheader("💼 Zainetto Fiscale")
@@ -207,18 +215,16 @@ with tabs[0]:
             st.plotly_chart(fig_equity, use_container_width=True)
             
         with g_cols[1]:
-            st.subheader("Monthly Profit/Loss (Realized)")
-            df_closed = df[df['stato'] == 'CHIUSA'].copy()
-            if not df_closed.empty:
-                df_closed['data_operazione'] = pd.to_datetime(df_closed['data_operazione'])
-                df_monthly = df_closed.set_index('data_operazione').resample('ME')['plus_minus'].sum().reset_index()
-                df_monthly['data_operazione'] = df_monthly['data_operazione'].dt.strftime('%b %Y')
-                fig_monthly = px.bar(df_monthly, x='data_operazione', y='plus_minus', 
-                                    color='plus_minus', color_continuous_scale=['#e74c3c', '#2ecc71'],
-                                    template="plotly_dark", title="Profitto/Perdita per Mese")
-                st.plotly_chart(fig_monthly, use_container_width=True)
+            st.subheader("Drawdown Analysis (%)")
+            if 'EquityCurve' in risk:
+                drawdown_df = pd.DataFrame(risk['EquityCurve'])
+                fig_dd = px.area(drawdown_df, x='data_operazione', y='drawdown',
+                                title="Andamento Drawdown",
+                                template="plotly_dark", color_discrete_sequence=['#e74c3c'])
+                fig_dd.update_layout(yaxis_tickformat='.1%')
+                st.plotly_chart(fig_dd, use_container_width=True)
             else:
-                st.info("Nessuna chiusura presente per il grafico mensile.")
+                st.info("Dati drawdown non disponibili.")
 
         # 4. Allocation Details
         st.divider()
@@ -382,6 +388,132 @@ with tabs[2]:
                 st.success("Nuova posizione inserita!"); st.rerun()
     else:
         st.warning("Solo gli amministratori possono inserire nuove posizioni.")
+
+# --- TP/SL Calculator Tab ---
+with tabs[3]:
+    st.subheader("🧮 Calcolatore Target Price & Stop Loss")
+    
+    # Input Section
+    with st.container():
+        c1, c2, c3 = st.columns(3)
+        buy_price = c1.number_input("Prezzo di Acquisto", min_value=0.0001, value=10.00, step=0.01, format="%.4f")
+        quantity = c2.number_input("Quantità di Acquisto", min_value=0.0001, value=100.0, step=1.0)
+        total_investment = buy_price * quantity
+        c3.metric("Investimento Totale", f"€ {total_investment:,.2f}")
+        
+        c4, c5, c6 = st.columns(3)
+        entry_cost = c4.number_input("Costo di Entrata (€)", min_value=0.0, value=2.95, step=0.05)
+        exit_cost = c5.number_input("Costo di Uscita (€)", min_value=0.0, value=2.95, step=0.05)
+        
+        st.divider()
+        
+        # Range Configuration
+        st.markdown("##### ⚙️ Configurazione Range Tabella")
+        r1, r2, r3 = st.columns(3)
+        down_range = r1.number_input("Diminuzione Prezzo (range)", min_value=0.0, value=1.0, step=0.1)
+        up_range = r2.number_input("Aumento Prezzo (range)", min_value=0.0, value=2.0, step=0.1)
+        step_val = r3.number_input("Step di variazione", min_value=0.0001, value=0.05, step=0.01, format="%.4f")
+
+    # Scaling Simulator Section
+    with st.expander("🔄 Simulatore Scaling In/Out (Avanzato)"):
+        st.markdown("Simula come cambia il tuo prezzo medio se compri ancora o se vendi una parte.")
+        sc1, sc2, sc3 = st.columns(3)
+        action = sc1.radio("Azione", ["Scaling Out (Vendi parte)", "Scaling In (Compra ancora)"])
+        sc_qta = sc2.number_input("Quantità Scaling", min_value=0.0, value=quantity/2 if action == "Scaling Out (Vendi parte)" else quantity)
+        sc_price = sc3.number_input("Prezzo di Esecuzione Scaling", min_value=0.0001, value=buy_price * 1.1 if action == "Scaling Out (Vendi parte)" else buy_price * 0.9)
+        
+        if action == "Scaling Out (Vendi parte)":
+            if sc_qta > quantity:
+                st.error("Non puoi vendere più di quanto possiedi!")
+            else:
+                realized_pl = (sc_price - buy_price) * sc_qta - exit_cost
+                rem_qta = quantity - sc_qta
+                st.info(f"💰 **Risultato Scaling Out:**\n- Profitto Realizzato: € {realized_pl:.2f}\n- Quantità Rimanente: {rem_qta}\n- Prezzo Medio Invariato: € {buy_price:.4f}")
+        else:
+            new_total_qta = quantity + sc_qta
+            new_pmc = ((quantity * buy_price) + (sc_qta * sc_price) + entry_cost) / new_total_qta
+            st.info(f"📥 **Risultato Scaling In:**\n- Nuova Quantità Totale: {new_total_qta}\n- Nuovo Prezzo Medio di Carico (PMC): € {new_pmc:.4f}\n- Investimento Extra: € {(sc_qta * sc_price):.2f}")
+
+    # Calculation Logic
+    import numpy as np
+    
+    start_p = max(0.0001, buy_price - down_range)
+    end_p = buy_price + up_range
+    
+    # Generate sequence including the exact buy_price, handled with precision
+    prices = np.arange(start_p, end_p + step_val, step_val)
+    # Append buy_price, round to handle float precision, and take unique values
+    prices = np.unique(np.round(np.append(prices, buy_price), 4))
+    # Sort just in case np.unique didn't maintain order (it usually does but safety first)
+    prices = np.sort(prices)
+    
+    calc_data = []
+    for p in prices:
+        pl_perc = (p / buy_price) - 1
+        pl_euro = (p - buy_price) * quantity - entry_cost - exit_cost
+        taxes = max(0, pl_euro * 0.26) if pl_euro > 0 else 0
+        net_profit = pl_euro - taxes
+        
+        calc_data.append({
+            "Prezzo": p,
+            "PL %": pl_perc,
+            "PL €": pl_euro,
+            "Tasse (26%)": taxes,
+            "Profitto Netto": net_profit
+        })
+    
+    calc_df = pd.DataFrame(calc_data)
+    
+    # --- Visualizations ---
+    st.subheader("📊 Analisi Grafica Scenari")
+    g_cols = st.columns(2)
+    
+    with g_cols[0]:
+        st.markdown("##### 📈 Grafico di Payoff (Netto)")
+        fig_payoff = px.line(calc_df, x="Prezzo", y="Profitto Netto", 
+                             template="plotly_dark",
+                             labels={"Prezzo": "Prezzo (€)", "Profitto Netto": "Profitto (€)"},
+                             color_discrete_sequence=['#00d4ff'])
+        fig_payoff.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig_payoff.add_vline(x=buy_price, line_dash="dot", line_color="#f1c40f")
+        fig_payoff.update_traces(mode='lines+markers', marker=dict(size=4))
+        st.plotly_chart(fig_payoff, use_container_width=True)
+
+    with g_cols[1]:
+        st.markdown("##### 📉 Performance Percentuale (PL %)")
+        # Color bars based on positive/negative
+        calc_df['color'] = calc_df['PL %'].apply(lambda x: '#2ecc71' if x > 0 else '#e74c3c')
+        fig_pl = px.bar(calc_df, x="Prezzo", y="PL %",
+                        template="plotly_dark",
+                        labels={"Prezzo": "Prezzo (€)", "PL %": "Rendimento (%)"},
+                        color='color', color_discrete_map="identity")
+        fig_pl.add_hline(y=0, line_color="white", line_width=1)
+        fig_pl.add_vline(x=buy_price, line_dash="dot", line_color="#f1c40f")
+        # Format Y axis as percentage
+        fig_pl.update_layout(yaxis_tickformat='.1%')
+        st.plotly_chart(fig_pl, use_container_width=True)
+
+    # Display Table with Formatting
+    st.subheader("📋 Tabella Riepilogativa Scenari")
+    
+    def highlight_buy_price(s):
+        is_buy = s.Prezzo == buy_price
+        return ['background-color: #1e3a5f; font-weight: bold' if is_buy else '' for _ in s]
+
+    def color_pl(val):
+        color = '#2ecc71' if val > 0 else '#e74c3c' if val < 0 else 'white'
+        return f'color: {color}'
+
+    styled_df = calc_df.style.format({
+        "Prezzo": "{:.4f}",
+        "PL %": "{:.2%}",
+        "PL €": "€ {:.2f}",
+        "Tasse (26%)": "€ {:.2f}",
+        "Profitto Netto": "€ {:.2f}"
+    }).apply(highlight_buy_price, axis=1)\
+      .map(color_pl, subset=['PL %', 'PL €', 'Profitto Netto'])
+
+    st.dataframe(styled_df, use_container_width=True, height=600, hide_index=True)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Automatic Trading Journal v2.5")

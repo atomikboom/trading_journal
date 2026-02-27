@@ -135,20 +135,55 @@ def get_portfolio_performance_metrics(df):
         "Inception": inception_ret
     }
 
-def get_risk_analysis(df):
+def get_risk_analysis(df, initial_balance):
     """
-    Calculate risk metrics: Standard Deviation, Variance of returns.
+    Calculate risk metrics: Standard Deviation, Sharpe, Sortino, VaR, and Max Drawdown.
     """
-    if df.empty or len(df) < 2:
-        return {"StdDev": 0.0, "Variance": 0.0}
+    if df.empty:
+        return {
+            "StdDev": 0.0, "Sharpe": 0.0, "Sortino": 0.0, 
+            "VaR": 0.0, "MaxDrawdown": 0.0, "CurrentDrawdown": 0.0
+        }
     
-    returns = df['rendimento_percentuale'].fillna(0)
-    std_dev = np.std(returns)
-    variance = np.var(returns)
+    # Sort by date for time-series analysis
+    df_sorted = df.sort_values('data_operazione').copy()
+    returns = df_sorted['rendimento_percentuale'].fillna(0) / 100
+    
+    # 1. Std Dev & Variance
+    std_dev = np.std(returns) if len(returns) > 1 else 0.0
+    
+    # 2. Sharpe Ratio (assuming 0% risk-free rate for simplicity)
+    mean_ret = np.mean(returns)
+    sharpe = (mean_ret / std_dev) if std_dev > 0 else 0.0
+    
+    # 3. Sortino Ratio
+    downside_returns = returns[returns < 0]
+    downside_std = np.std(downside_returns) if len(downside_returns) > 1 else 0.0
+    sortino = (mean_ret / downside_std) if downside_std > 0 else 0.0
+    
+    # 4. Value at Risk (VaR) - 95% Confidence (Historical)
+    if len(returns) >= 5:
+        var_95 = np.percentile(returns, 5)
+    else:
+        var_95 = 0.0
+        
+    # 5. Drawdown Analysis
+    df_sorted['cum_profit'] = df_sorted['net_profit'].cumsum()
+    df_sorted['equity'] = initial_balance + df_sorted['cum_profit']
+    df_sorted['peak'] = df_sorted['equity'].cummax()
+    df_sorted['drawdown'] = (df_sorted['equity'] - df_sorted['peak']) / df_sorted['peak']
+    
+    max_drawdown = df_sorted['drawdown'].min() if not df_sorted.empty else 0.0
+    current_drawdown = df_sorted['drawdown'].iloc[-1] if not df_sorted.empty else 0.0
     
     return {
-        "StdDev": std_dev,
-        "Variance": variance
+        "StdDev": std_dev * 100, # In percentage
+        "Sharpe": sharpe,
+        "Sortino": sortino,
+        "VaR": var_95 * 100, # In percentage
+        "MaxDrawdown": max_drawdown * 100, # In percentage
+        "CurrentDrawdown": current_drawdown * 100, # In percentage
+        "EquityCurve": df_sorted[['data_operazione', 'equity', 'drawdown']].to_dict('records')
     }
 
 def get_calculated_values(data):
